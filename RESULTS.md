@@ -69,3 +69,14 @@ The forced backend caused speculative decode to fall back to piecewise CUDA grap
 - A mixed pool can improve aggregate throughput while worsening tail latency; report both.
 - Gateway request counts must show nonzero traffic on both backend names before calling the run heterogeneous.
 - One run is an exploratory systems result, not a statistically precise hardware ranking.
+
+## Producer/consumer role migration: 2026-09-29
+
+`runs/role-smoke-20260929T141608Z/` verified the current Dynamo role split on the H200 P/D deployment. The prefill worker used `kv_producer` and the decode worker used `kv_consumer`. One completion transferred 195.8 MB of KV data, and Dynamo recorded separate prefill and decode worker IDs for completed benchmark requests. The run logs contain no `kv_both` role warning.
+
+| Workload | Success | Output tok/s | Mean TTFT | Mean TPOT | Prior H200 output tok/s |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 8,192 in / 256 out | 12 / 12 | 94.29 | 5.75 s | 17.24 ms | 94.36 |
+| 512 in / 2,048 out | 24 / 24 | 440.54 | 849 ms | 17.74 ms | 440.08 |
+
+The result is one controlled rerun, so it shows no measured regression from the role migration. It does not establish a throughput gain from it.

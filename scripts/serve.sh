@@ -67,7 +67,6 @@ common_worker=(
     --gdn-prefill-backend flashinfer
     --compilation-config "$compile_config"
     --language-model-only
-    --kv-transfer-config '{"kv_connector":"NixlConnector","kv_role":"kv_both","kv_load_failure_policy":"fail"}'
 )
 if (( MTP_TOKENS > 0 )); then
     common_worker+=(--speculative-config "{\"method\":\"mtp\",\"num_speculative_tokens\":$MTP_TOKENS}")
@@ -78,6 +77,7 @@ fi
     export DYN_SYSTEM_PORT="$PREFILL_SYSTEM_PORT"
     export VLLM_NIXL_SIDE_CHANNEL_PORT="$PREFILL_NIXL_PORT"
     exec setsid "${common_worker[@]}" --disaggregation-mode prefill \
+        --kv-transfer-config '{"kv_connector":"NixlConnector","kv_role":"kv_producer","kv_load_failure_policy":"fail"}' \
         --kv-events-config "{\"publisher\":\"zmq\",\"topic\":\"kv-events\",\"endpoint\":\"tcp://*:$KV_EVENT_PORT\",\"enable_kv_cache_events\":true}"
 ) >"$RUN_DIR/prefill.log" 2>&1 &
 pids+=("$!")
@@ -90,7 +90,8 @@ for index in "${!decode_gpus[@]}"; do
         export CUDA_VISIBLE_DEVICES="${decode_gpus[$index]}"
         export DYN_SYSTEM_PORT="${system_ports[$index]}"
         export VLLM_NIXL_SIDE_CHANNEL_PORT="${nixl_ports[$index]}"
-        exec setsid "${common_worker[@]}" --disaggregation-mode decode
+        exec setsid "${common_worker[@]}" --disaggregation-mode decode \
+            --kv-transfer-config '{"kv_connector":"NixlConnector","kv_role":"kv_consumer","kv_load_failure_policy":"fail"}'
     ) >"$RUN_DIR/decode-$index.log" 2>&1 &
     pids+=("$!")
 done
