@@ -1,0 +1,58 @@
+schema_version: 2
+software:
+  venv: ~/.venvs/vllm
+  modules: [gcc/13.1.0, cuda13.0/toolkit/13.0.2]
+  cuda_home: /cm/shared/apps/cuda13.0/toolkit/13.0.2
+  versions: {ai-dynamo: 1.5.0, vllm: 0.28.0, nixl: 1.3.2}
+  etcd: ~/.local/bin/etcd
+  nats: ~/.local/bin/nats-server
+  control_versions: {etcd: v3.7.2, nats: v2.15.1}
+models:
+  dense:
+    path: ~/models/qwen3.6-27b
+    served_name: qwen3.6-27b
+  moe:
+    path: ~/models/qwen3.6-35b-a3b
+    served_name: qwen3.6-35b-a3b
+engine:
+  dtype: bfloat16
+  gpu_memory_utilization: 0.88
+  max_model_len: 32768
+  max_num_seqs: 32
+  max_num_batched_tokens: 8192
+  mtp_tokens: 3
+  prefix_caching: true
+  gdn_prefill_backend: flashinfer
+  # Candidate adapters remain selectable; their incremental cross-node/MTP gain is not yet verified.
+  kernels: custom
+frontend:
+  port: 19000
+  router_mode: kv
+control:
+  etcd_port: 23790
+  etcd_peer_port: 23791
+  nats_port: 42220
+  startup_timeout: 1200
+transport:
+  # Leave UCX device/transport selection to the runtime until topology is measured.
+  environment: {}
+fabric:
+  target_utilization: 0.8
+  kv_bytes_per_element: 2
+  recurrent_bytes_per_element: 4
+  conv_bytes_per_element: 2
+recipes:
+  initial-h100:
+    model: dense
+    control_node: g001
+    # Existing user-owned allocations; refresh these IDs before a later run.
+    allocations: {g001: 1209720, g003: 1209721, g004: 1209722}
+    workers:
+      - {name: prefill, role: prefill, node: g003, tp: 1, system_port: 18082, nixl_port: 15600, event_port: 29080}
+      - {name: decode, role: decode, node: g004, tp: 1, system_port: 18081, nixl_port: 15601}
+  # Add H200 allocations here when available; worker nodes may use different GPU types.
+  heterogeneous:
+    model: dense
+    control_node: null
+    allocations: {}
+    workers: []

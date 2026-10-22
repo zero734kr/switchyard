@@ -1,6 +1,35 @@
 # Results
 
-## H200 + H100 run: 2026-09-29
+## Provisional cross-node H100 results
+
+Measured 2026-10-21 (America/New_York). Qwen3.6-27B BF16, Dynamo 1.5.0 / vLLM 0.28.0 / NIXL 1.3.2; MTP 3, prefix caching, FlashInfer GDN prefill, 32K context limit, 32 maximum sequences, 8192 batched tokens, GPU memory utilization 0.88.
+
+One H100 NVL (~94 GiB) on g003 performed prefill and one on g004 performed decode. g001 hosted the gateway/frontend/etcd/NATS; its allocated GPU was not used for inference. All 36 measured requests completed without failures.
+
+| Workload | Nominal input → output | Concurrency / requests | Output tok/s | Mean TTFT | Mean TPOT |
+| --- | --- | --- | ---: | ---: | ---: |
+| Prefill-heavy | 8192 → 256 | 4 / 12 | 190.81 | 2702.67 ms | 8.80 ms |
+| Decode-heavy | 512 → 2048 | 8 / 24 | **755.01** | **515.74 ms** | **8.56 ms** |
+
+**Provisional:** one run per workload, with no matched baseline/public/custom comparison or task-quality evaluation. Adapter loading did not establish custom decode execution in this run. The later [batch 2–16 kernel smoke](kernels/README.md) is separate evidence.
+
+### Method and evidence
+
+The unchanged `scripts/benchmark.sh` used `vllm bench serve`, the OpenAI completions backend, random inputs, temperature 0, `ignore-eos`, one warmup per workload, and detailed TTFT/TPOT/ITL/E2E output. Requests ran through the gateway and cross-node Dynamo/NIXL path. Worker logs showed prefill activity on the producer and generation with externally cached prefixes on the consumer. Adapter import/configuration markers alone do not prove decode dispatch; graph capture can also produce markers.
+
+The server's `/tokenize` endpoint was unavailable, so requested input lengths were nominal. Actual aggregate inputs were **94,009** and **11,610** tokens respectively; outputs were exactly **3,072** and **49,152**. Durations were 16.1000 s and 65.1014 s. Median TTFT was 2160.50 / 390.29 ms; median TPOT was 8.07 / 8.33 ms. Throughput is aggregate output tokens divided by benchmark duration, not per-request generation speed. MTP emits chunks, so ITL must not be substituted for TPOT.
+
+A [numeric summary](results/h100-cross-node-20261021.json) is included in the repository. The source JSON files and configuration snapshot remain under `runs/smoke-h100-retry1/` on Jarvis (raw runs are ignored by Git). No task-success or output-quality evaluation was performed in this synthetic smoke test. Tool parsing was enabled but tool execution was not benchmarked. No new 35B-A3B cross-node result is claimed.
+
+### What remains
+
+Compare the batch extension against matched baseline/public/custom serving runs with quality checks. Measure effective NIXL transfer cost before P:D ratio tuning and heterogeneous H100/H200 trials. The policy-repair agent benchmark is separate work. Earlier measurements below used different hardware, topology, and MTP settings and are not a matched baseline for the 755 tok/s result.
+
+---
+
+## Historical measurements (previous deployment)
+
+### H200 + H100 run: 2026-09-29
 
 `runs/h100-128-completions-20260929/` completed with no failed benchmark requests. It used Qwen3.6-27B, bf16, MTP disabled, CUDA 13, Dynamo 1.5.0, vLLM 0.28.0, and deterministic completion requests (`temperature=0`, `ignore_eos=true`). Each target received the same token lengths, concurrency, request count, and random seed.
 
@@ -13,64 +42,9 @@
 | `h100-1p2d` | 3 × H100 SXM | 512 in / 2,048 out | 24 / 24 | 369.62 | 1.23 s | 20.85 ms |
 | `heterogeneous-pool` | 5 GPUs total | 512 in / 2,048 out | 24 / 24 | 385.71 | 587 ms | 18.72 ms |
 
-### Routing evidence
+The gateway sent six prefill-heavy and twelve decode-heavy completions to each backend, verified from unique frontend request IDs. The pooled prefill case reused deterministic prompts after the direct runs, so its prefix caches could be warm. The five-GPU pool and direct targets also used different GPU counts; this is routing evidence, not a matched hardware ranking.
 
-The pooled workload sent six prefill-heavy completion requests and twelve decode-heavy completion requests to **each** backend. This is verified from unique `x_request_id` values in both Dynamo frontend logs. The gateway status at shutdown recorded zero active requests and zero failures on both backends (`h200-pd`: 30 proxied HTTP calls; `h100-1p2d`: 18). Those counters include benchmark helper calls such as `/tokenize` and `/metrics`, so the frontend request IDs are the generation-routing evidence.
-
-### What this run does and does not show
-
-- It proves one streaming endpoint sent live completion traffic to an H200 P/D deployment and an H100 1-prefill/2-decode deployment in the same run.
-- Direct H200 results were faster than the H100 deployment for both workloads under these exact profiles.
-- The equal-weight gateway improved warm prefill-heavy throughput. It is **not** a cold-cache speedup result: the pooled prefill case ran after the direct cases using the same deterministic prompt seed, so Dynamo prefix caches could already contain the prompt prefixes.
-- The pooled decode-heavy result was below the direct H200 decode result. With only eight concurrent requests, equal request splitting reduces H200 batch size and sends half the traffic to the slower H100 branch. A capacity-aware weight or a higher offered load is the next experiment, not a conclusion from this one sample.
-
-### H100 fit findings
-
-The H100 profile first failed with the H200 defaults. These are measured vLLM admission limits, so the final H100 profile uses 98,304 context tokens and 128 sequences:
-
-| Check | H100 result |
-| --- | --- |
-| MTP2 startup | CUDA graph profiling OOM: 1.56 GiB requested with 1.52 GiB free |
-| MTP disabled, 131,072 context | 6.95 GiB KV available; Qwen3.6 required 8.33 GiB |
-| 98,304 context, 512 sequences | 145 Mamba cache blocks; CUDA graph capture rejected 512 sequences |
-| Final H100 profile | MTP disabled, 98,304 context, 128 sequences |
-
-All benchmark requests remain within the final H100 limits.
-
-## Verified exploratory observations
-
-These measurements came from the earlier two-H200 tuning session. They establish the path to the current configuration but are not a controlled comparison with the heterogeneous pool.
-
-### Correctness and transfer
-
-| Observation | Value |
-| --- | ---: |
-| External prefix reuse | 95.5–100% |
-| Direct CUDA peer bandwidth, GPU 0 → 1 | ~122.96 GiB/s |
-| Direct CUDA peer bandwidth, GPU 1 → 0 | ~122.98 GiB/s |
-| 256 MiB peer copy | ~2.033 ms |
-
-NIXL telemetry included transfers around 211 MB, 1,326 MB, and 2,124 MB. Its reported transfer duration includes completion polling behavior and must not be presented as raw NVLink bandwidth.
-
-### Decode backend regression
-
-| Configuration | Warm single-request decode |
-| --- | ---: |
-| Forced `--attention-backend FLASHINFER`, MTP enabled | ~25–28 tokens/s |
-| vLLM automatic decode backend, MTP enabled | ~64–71 tokens/s |
-
-The forced backend caused speculative decode to fall back to piecewise CUDA graphs. Removing that override produced roughly a 2.5× recovery while remote reuse remained 96–100%. This is a configuration recovery, not an end-to-end P/D speedup claim.
-
-## Interpretation rules
-
-- Compare completed requests and failures before comparing throughput.
-- Treat the pooled result as a gateway-routing result with a warm-cache caveat. It uses five GPUs, while each direct target uses only its own allocation.
-- Use TTFT for prefill behavior and TPOT/ITL for decode behavior.
-- A mixed pool can improve aggregate throughput while worsening tail latency; report both.
-- Gateway request counts must show nonzero traffic on both backend names before calling the run heterogeneous.
-- One run is an exploratory systems result, not a statistically precise hardware ranking.
-
-## Producer/consumer role migration: 2026-09-29
+### Producer/consumer role migration: 2026-09-29
 
 `runs/role-smoke-20260929T141608Z/` verified the current Dynamo role split on the H200 P/D deployment. The prefill worker used `kv_producer` and the decode worker used `kv_consumer`. One completion transferred 195.8 MB of KV data, and Dynamo recorded separate prefill and decode worker IDs for completed benchmark requests. The run logs contain no `kv_both` role warning.
 

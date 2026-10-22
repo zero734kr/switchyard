@@ -1,0 +1,6 @@
+[project]
+name = "switchyard"
+version = "0.2.0"
+description = "Jarvis Slurm cross-node inference recipes and Triton kernels"
+requires-python = ">=3.12"
+dependencies = ["PyYAML>=6.0,<7"]
