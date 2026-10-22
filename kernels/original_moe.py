@@ -1,22 +1,34 @@
-"""Experimental BF16 Qwen MoE decode fusion; validated with vLLM 0.28.0.
+"""BF16 Qwen MoE decode fusion for vLLM 0.28.0.
 
 The two-kernel strategy has public prior art; see LITERATURE.md. ``install``
-adds a guarded single-token path without modifying installed package files.
+adds a guarded batched decode path without modifying installed package files.
 """
 
-import torch, triton, triton.language as tl, json, statistics, os
-from vllm.model_executor.layers.fused_moe.fused_moe import fused_experts
+import torch
+import triton
+import triton.language as tl
+
+_ANNOUNCED_FALLBACKS = set()
 
 
 @triton.jit
 def up(
-    X, W, IDS, Z, H: tl.constexpr, N: tl.constexpr, R: tl.constexpr, BH: tl.constexpr
+    X,
+    W,
+    IDS,
+    Z,
+    H: tl.constexpr,
+    N: tl.constexpr,
+    TOP: tl.constexpr,
+    R: tl.constexpr,
+    BH: tl.constexpr,
 ):
-    slot = tl.program_id(0)
-    row = tl.program_id(1) * R + tl.arange(0, R)
+    row = tl.program_id(0) * R + tl.arange(0, R)
+    token_slot = tl.program_id(1)
+    token = token_slot // TOP
     k = tl.arange(0, BH)
-    expert = tl.load(IDS + slot)
-    x = tl.load(X + k, k < H, 0).to(tl.float32)
+    expert = tl.load(IDS + token_slot)
+    x = tl.load(X + token * H + k, k < H, 0).to(tl.float32)
     g = tl.load(
         W + (expert * 2 * N + row[:, None]) * H + k[None, :],
         (row[:, None] < N) & (k[None, :] < H),
@@ -30,7 +42,7 @@ def up(
     a = tl.sum(g * x[None, :], 1).to(tl.bfloat16).to(tl.float32)
     b = tl.sum(u * x[None, :], 1).to(tl.bfloat16).to(tl.float32)
     z = a * tl.sigmoid(a) * b
-    tl.store(Z + slot * N + row, z, row < N)
+    tl.store(Z + token_slot * N + row, z, row < N)
 
 
 @triton.jit
@@ -47,11 +59,15 @@ def down(
     BN: tl.constexpr,
 ):
     row = tl.program_id(0) * R + tl.arange(0, R)
+    token = tl.program_id(1)
     s = tl.arange(0, TOP)
     k = tl.arange(0, BN)
-    e = tl.load(IDS + s)
-    wt = tl.load(TW + s)
-    z = tl.load(Z + s[:, None] * N + k[None, :], k[None, :] < N, 0).to(tl.float32)
+    token_slots = token * TOP + s
+    e = tl.load(IDS + token_slots)
+    wt = tl.load(TW + token_slots)
+    z = tl.load(
+        Z + token_slots[:, None] * N + k[None, :], k[None, :] < N, 0
+    ).to(tl.float32)
     w = tl.load(
         W + (e[None, :, None] * H + row[:, None, None]) * N + k[None, None, :],
         (row[:, None, None] < H) & (k[None, None, :] < N),
@@ -60,15 +76,18 @@ def down(
     a = tl.sum(w * z[None, :, :], 2) * wt[None, :]
     a = a.to(tl.bfloat16).to(tl.float32)
     y = tl.sum(a, 1)
-    tl.store(Y + row, y, row < H)
+    tl.store(Y + token * H + row, y, row < H)
 
 
 def install():
-    """Install the opt-in, version-specific TritonExperts.apply wrapper."""
+    """Install a guarded TritonExperts.apply wrapper for decode batches."""
     from vllm.model_executor.layers.fused_moe.experts.triton_moe import TritonExperts
     from vllm.model_executor.layers.fused_moe.activation import MoEActivation
 
     original = TritonExperts.apply
+    up_rows = 2
+    down_rows = 2
+    max_tokens = 8
 
     def apply(
         self,
@@ -88,12 +107,16 @@ def install():
         expert_tokens_meta,
         apply_router_weight_on_input,
     ):
+        num_tokens = hidden_states.shape[0] if hidden_states.ndim == 2 else 0
         supported = (
-            hidden_states.shape == (1, 2048)
+            hidden_states.ndim == 2
+            and 1 <= num_tokens <= max_tokens
+            and hidden_states.shape[1] == 2048
             and w1.shape == (256, 1024, 2048)
             and (w2.shape == (256, 2048, 512))
-            and (topk_ids.shape == (1, 8))
-            and (output.shape == (1, 2048))
+            and (topk_ids.shape == (num_tokens, 8))
+            and (topk_weights.shape == (num_tokens, 8))
+            and (output.shape == (num_tokens, 2048))
             and (
                 hidden_states.dtype
                 == w1.dtype
@@ -104,6 +127,8 @@ def install():
             and hidden_states.is_contiguous()
             and w1.is_contiguous()
             and w2.is_contiguous()
+            and topk_ids.is_contiguous()
+            and topk_weights.is_contiguous()
             and output.is_contiguous()
             and (expert_map is None)
             and (global_num_experts in (-1, 256))
@@ -118,17 +143,67 @@ def install():
         )
 
         if supported:
-            if not getattr(self, "_jarvis_announced", False):
-                print("JARVIS_MOE_SINGLE_TOKEN_ENABLED", flush=True)
-                self._jarvis_announced = True
+            if num_tokens not in _ANNOUNCED_FALLBACKS:
+                capturing = torch.cuda.is_current_stream_capturing()
+                print(
+                    f"JARVIS_MOE_TRITON_DISPATCH tokens={num_tokens} "
+                    f"cuda_graph_capture={capturing}",
+                    flush=True,
+                )
+                _ANNOUNCED_FALLBACKS.add(num_tokens)
 
-            z = torch.empty((8, 512), device=hidden_states.device, dtype=torch.bfloat16)
-            up[8, 256](hidden_states, w1, topk_ids, z, 2048, 512, 2, 2048, num_warps=4)
-            down[1024,](
-                z, w2, topk_ids, topk_weights, output, 2048, 512, 8, 2, 512, num_warps=4
+            z = torch.empty(
+                (num_tokens, 8, 512),
+                device=hidden_states.device,
+                dtype=torch.bfloat16,
+            )
+            up[(triton.cdiv(512, up_rows), num_tokens * 8)](
+                hidden_states,
+                w1,
+                topk_ids,
+                z,
+                2048,
+                512,
+                8,
+                up_rows,
+                2048,
+                num_warps=4,
+            )
+            down[(triton.cdiv(2048, down_rows), num_tokens)](
+                z,
+                w2,
+                topk_ids,
+                topk_weights,
+                output,
+                2048,
+                512,
+                8,
+                down_rows,
+                512,
+                num_warps=4,
             )
 
             return None
+
+        if hidden_states.ndim == 2:
+            fallback_key = (
+                hidden_states.shape[0],
+                tuple(hidden_states.shape),
+                tuple(w1.shape),
+                tuple(w2.shape),
+                str(hidden_states.dtype),
+            )
+            if fallback_key not in _ANNOUNCED_FALLBACKS:
+                print(
+                    "JARVIS_MOE_TRITON_FALLBACK "
+                    f"tokens={hidden_states.shape[0]} hidden={hidden_states.shape[1]} "
+                    f"w1={tuple(w1.shape)} w2={tuple(w2.shape)} "
+                    f"dtype={hidden_states.dtype} contiguous="
+                    f"{hidden_states.is_contiguous()}/{w1.is_contiguous()}/"
+                    f"{w2.is_contiguous()}/{output.is_contiguous()}",
+                    flush=True,
+                )
+                _ANNOUNCED_FALLBACKS.add(fallback_key)
 
         return original(
             self,

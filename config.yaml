@@ -50,7 +50,14 @@ recipes:
     workers:
       - {name: prefill, role: prefill, node: g003, tp: 1, system_port: 18082, nixl_port: 15600, event_port: 29080}
       - {name: decode, role: decode, node: g004, tp: 1, system_port: 18081, nixl_port: 15601}
-  # Add H200 allocations here when available; worker nodes may use different GPU types.
+  initial-h200:
+    model: dense
+    control_node: g212
+    # Active two-H200 allocation on one node; refresh the job ID before a later run.
+    allocations: {g212: 1210692}
+    workers:
+      - {name: prefill, role: prefill, node: g212, gpu_ids: [0], tp: 1, system_port: 18082, nixl_port: 15600, event_port: 29080}
+      - {name: decode, role: decode, node: g212, gpu_ids: [1], tp: 1, system_port: 18081, nixl_port: 15601}
   heterogeneous:
     model: dense
     control_node: null

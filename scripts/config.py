@@ -42,8 +42,6 @@ def resolve(config, name, model=None):
         raise ValueError("worker names must be unique")
     if any(w["name"] in ("etcd", "nats", "frontend") for w in workers):
         raise ValueError("worker names must not shadow control services")
-    if len({w["node"] for w in workers}) < 2:
-        raise ValueError("this recipe requires cross-node P/D")
     if len({w["tp"] for w in workers}) != 1:
         raise ValueError("the pinned hybrid-model connector requires matching P/D TP")
     ports = {}
@@ -53,14 +51,41 @@ def resolve(config, name, model=None):
     ports[control].append(config["frontend"]["port"])
     if config["frontend"]["router_mode"] not in ("kv", "round-robin"):
         raise ValueError("frontend.router_mode must be kv or round-robin")
+    workers_by_node = {}
     for w in workers:
         if w["node"] not in nodes or w["role"] not in ("prefill", "decode"):
             raise ValueError(f"invalid worker placement: {w}")
         if not isinstance(w["tp"], int) or isinstance(w["tp"], bool) or w["tp"] < 1:
             raise ValueError("tp must be a positive integer")
+        gpu_ids = w.get("gpu_ids")
+        if gpu_ids is not None and (
+            not isinstance(gpu_ids, list)
+            or len(gpu_ids) != w["tp"]
+            or any(
+                not isinstance(gpu_id, int)
+                or isinstance(gpu_id, bool)
+                or gpu_id < 0
+                for gpu_id in gpu_ids
+            )
+            or len(set(gpu_ids)) != len(gpu_ids)
+        ):
+            raise ValueError(
+                f"{w['name']}.gpu_ids must contain tp unique nonnegative integers"
+            )
+        workers_by_node.setdefault(w["node"], []).append(w)
         ports.setdefault(w["node"], []).extend(
             w[k] for k in ("system_port", "nixl_port", "event_port") if k in w
         )
+    for node, colocated in workers_by_node.items():
+        if len(colocated) < 2:
+            continue
+        if any(w.get("gpu_ids") is None for w in colocated):
+            raise ValueError(
+                f"workers sharing {node} must each set gpu_ids to avoid sharing devices"
+            )
+        gpu_ids = [gpu_id for w in colocated for gpu_id in w["gpu_ids"]]
+        if len(gpu_ids) != len(set(gpu_ids)):
+            raise ValueError(f"workers sharing {node} must use disjoint gpu_ids")
     for node, values in ports.items():
         if len(values) != len(set(values)) or any(
             not isinstance(p, int) or isinstance(p, bool) or not 1 <= p <= 65535

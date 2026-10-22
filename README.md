@@ -58,6 +58,10 @@ frontend:
 
 Update `recipes.initial-h100.allocations` with current job IDs and set the control/prefill/decode nodes to match. Model paths and the existing inference venv are under `models` and `software`. MTP=3, prefix caching, tool parsing, and kernel selection stay configured as above. Planner is not launched; replica counts come from the placement recipe.
 
+Control services and both P/D workers may share one node and Slurm allocation. For colocated workers, set disjoint `gpu_ids` lists; indices select from the `CUDA_VISIBLE_DEVICES` list Slurm exposes to that allocation step. The worker process then sees only its selected devices. The `initial-h200` recipe currently places control, prefill, and decode on `g212` in allocation `1210692`, assigning prefill GPU 0 and decode GPU 1. Refresh the job ID when that allocation expires.
+
+For tensor parallel workers, provide one index per GPU in `tp`. The launcher keeps etcd, NATS, and the frontend on CPU-only Slurm steps.
+
 To check streaming after startup:
 
 ```bash

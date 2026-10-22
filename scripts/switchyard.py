@@ -57,6 +57,8 @@ def worker_args(c, model, w):
     ]
     if e["prefix_caching"]:
         args.append("--enable-prefix-caching")
+    if e.get("enforce_eager", False):
+        args.append("--enforce-eager")
     if e["mtp_tokens"]:
         args += [
             "--speculative-config",
@@ -158,6 +160,25 @@ def service(c, r, model, key, name, run_dir):
         ], env
     w = next(w for w in r["workers"] if w["name"] == name)
     visible = env.get("CUDA_VISIBLE_DEVICES", "")
+    gpu_ids = w.get("gpu_ids")
+    if gpu_ids is not None:
+        devices = [device.strip() for device in visible.split(",") if device.strip()]
+        if not devices:
+            raise ValueError(
+                f"Slurm did not expose CUDA_VISIBLE_DEVICES for {name}; cannot map gpu_ids"
+            )
+        if any(gpu_id >= len(devices) for gpu_id in gpu_ids):
+            raise ValueError(
+                f"{name}.gpu_ids={gpu_ids} exceeds the {len(devices)} GPUs exposed by Slurm"
+            )
+        selected = [devices[gpu_id] for gpu_id in gpu_ids]
+        env["CUDA_VISIBLE_DEVICES"] = ",".join(selected)
+        visible = env["CUDA_VISIBLE_DEVICES"]
+        print(
+            f"Switchyard GPU assignment {name}: allocation-visible indices {gpu_ids} "
+            f"-> CUDA_VISIBLE_DEVICES={visible}",
+            flush=True,
+        )
     if not visible or len(visible.split(",")) < w["tp"]:
         raise ValueError(f"Slurm has not exposed {w['tp']} GPUs for {name}")
     env.update(
@@ -203,7 +224,7 @@ def step(c, r, a, name, run_dir):
             ]
         ),
     ]
-    return [
+    command = [
         "srun",
         f"--jobid={r['allocations'][node]}",
         "--overlap",
@@ -216,6 +237,9 @@ def step(c, r, a, name, run_dir):
         "-lc",
         "\n".join(setup),
     ]
+    if name in {"etcd", "nats", "frontend"}:
+        command.insert(-3, "--gres=none")
+    return command
 
 
 def validate_allocations(r):
@@ -454,6 +478,11 @@ def main():
             print(shlex.join(step(c, r, a, name, directory)))
         for w in r["workers"]:
             print(f"# {w['name']} engine args: {shlex.join(worker_args(c, model, w))}")
+            if w.get("gpu_ids") is not None:
+                print(
+                    f"# {w['name']} CUDA_VISIBLE_DEVICES selects allocation-visible indices "
+                    + ",".join(map(str, w["gpu_ids"]))
+                )
     else:
         run(c, r, model, key, a, directory, check_only=a.action == "control-check")
 
