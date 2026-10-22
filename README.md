@@ -77,3 +77,10 @@ Dynamo does not expose the vLLM `/tokenize` helper. Benchmark input lengths rema
 - [`RESULTS.md`](RESULTS.md): provisional measurements and historical results; [`DESIGN.md`](DESIGN.md): concise deployment notes.
 
 Next: validate the batch 2–16 dense kernel in matched serving runs with output checks, measure effective cross-node transfer bandwidth, then tune heterogeneous placement. The separate policy-repair agent benchmark is not included here.
+
+## Special Thanks
+
+- [Doubleword AI](https://github.com/doublewordai) for:
+  - [“When to Disaggregate”](https://blog.doubleword.ai/when-to-disaggregate)
+  - [Inference Lab](https://github.com/doublewordai/inference-lab)
+- [DeepFusionKernel authors](https://aclanthology.org/2026.acl-short.15/)
