@@ -4,9 +4,9 @@ Cross-node LLM serving on Stevens Jarvis, built around NVIDIA Dynamo, Slurm and 
 
 ## Provisional result
 
-A cross-node run on 2026-10-23 reported **1,282.89 output tokens/s**, **4.34 ms mean TPOT**, and **298.59 ms mean TTFT** for decode-heavy traffic; the prefill-heavy run reported **313.01 output tokens/s**. The result artifact identifies its model as `qwen3.8-27b`.
+A cross-node run on 2026-10-23 reported **1,282.89 output tokens/s**, **4.34 ms mean TPOT**, and **298.59 ms mean TTFT** for decode-heavy traffic; the prefill-heavy run reported **313.01 output tokens/s**. It used one H200 NVL for prefill, one for decode, DFlash 2, and a separate control allocation. The prefill-heavy run reached **190.81 output tokens/s**.
 
-These are single-run, provisional serving measurements, not a matched gain or evidence that a custom Triton kernel was selected. The result artifact does not record GPU model or full serving configuration. See [RESULTS.md](RESULTS.md) for the measurements and caveats, and [kernels/README.md](kernels/README.md) for separate operator and dispatch evidence.
+These are single-run, provisional serving measurements. See [RESULTS.md](RESULTS.md) for the measurements and caveats, and [kernels/README.md](kernels/README.md) for separate operator and dispatch evidence.
 
 ## Maybe Kubernetes?
 

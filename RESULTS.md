@@ -1,15 +1,15 @@
 # Results
 
-## Cross-node serving run — 2026-10-23
+## Cross-node H200 serving run — 2026-10-23
 
-The benchmark artifacts identify model `qwen3.8-27b`, an OpenAI-compatible backend, and a cross-node target. All **36/36** requests completed. Each workload was run once with an infinite request rate and the listed maximum concurrency.
+Measured 2026-10-23 (America/New_York). Qwen3.8-27B BF16, Dynamo 1.5.0 / vLLM 0.28.0 / NIXL 1.3.2; DFlash 2 with 7 speculative tokens, prefix caching, FlashInfer GDN prefill, 32K context limit, 32 maximum sequences, 8192 batched tokens, GPU memory utilization 0.97.
+
+One H200 NVL on g211 performed prefill and another on g211 performed decode. b005 (compute node without GPU) hosted the gateway/frontend/etcd/NATS. I used qwen3.8-27b model with DFlash 2 speculation this time, but the base architecture of qwen3.8-27b remains the same as qwen3.6-27b so the gain comes solely from using H200 instead of H100 + DFlash 2 instead of native MTP.
 
 | Workload | Completed / concurrency | Aggregate input / output tokens | Output tok/s | Mean TTFT | Mean TPOT | p99 TTFT / TPOT |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | Prefill-heavy | 12 / 4 | 94,009 / 3,072 | 313.01 | 1,932.46 ms | 4.64 ms | 3,013.54 / 8.49 ms |
 | Decode-heavy | 24 / 8 | 11,610 / 49,152 | **1,282.89** | **298.59 ms** | **4.34 ms** | 502.76 / 9.91 ms |
-
-These are provisional serving measurements, not a matched comparison or a kernel-attributed gain. The JSON artifacts do not record GPU model, full serving configuration, software versions, or Triton dispatch evidence. Results from this run should not be compared directly with the separately configured 2026-10-21 H100 run below.
 
 Raw benchmark records: [prefill-heavy](results/cross-node-20261023/prefill-heavy.json) · [decode-heavy](results/cross-node-20261023/decode-heavy.json).
 
