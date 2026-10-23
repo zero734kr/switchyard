@@ -1,4 +1,7 @@
-"""Experimental kernel extracted unchanged from the measured operator probe."""
+"""One launch for the GDN QKVZ and BA projections.
+
+Measured operator; kept verbatim from the probe it was timed with.
+"""
 
 import triton
 import triton.language as tl

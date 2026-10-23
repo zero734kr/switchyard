@@ -50,8 +50,8 @@ wheels = [
 
 [[package]]
 name = "switchyard"
-version = "0.2.0"
-source = { virtual = "." }
+version = "0.3.0"
+source = { editable = "." }
 dependencies = [
     { name = "pyyaml" },
 ]

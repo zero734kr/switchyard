@@ -38,6 +38,10 @@ transport:
   environment: {}
 fabric:
   target_utilization: 0.8
+  # 'local' pins each worker to the HCA attached to its GPU, using
+  # nvidia-smi topo -m; a worker with no locally attached HCA falls back to
+  # 'all'. Override per deployment with transport.environment.
+  hca_selection: local
   kv_bytes_per_element: 2
   recurrent_bytes_per_element: 4
   conv_bytes_per_element: 2
@@ -52,12 +56,32 @@ recipes:
       - {name: decode, role: decode, node: g004, tp: 1, system_port: 18081, nixl_port: 15601}
   initial-h200:
     model: dense
-    control_node: g212
-    # Active two-H200 allocation on one node; refresh the job ID before a later run.
-    allocations: {g212: 1210692}
+    control_node: b005
+    # Two-H200 example on one node; refresh allocation IDs before a later run.
+    allocations: {b005: 1210736, g212: 1210692}
+    # CPU/NUMA placement is automatic within the allocation.
+    # Optional overrides: cpus_per_task (CPU affinity cap), numa_node (host-specific).
     workers:
       - {name: prefill, role: prefill, node: g212, gpu_ids: [0], tp: 1, system_port: 18082, nixl_port: 15600, event_port: 29080}
       - {name: decode, role: decode, node: g212, gpu_ids: [1], tp: 1, system_port: 18081, nixl_port: 15601}
+  initial-h200-pool:
+    model: dense
+    control_node: b005
+    # Live layout: one single-GPU prefill on g211 feeding four single-GPU decode
+    # replicas, two in each of the two 2-GPU g212 allocations. Every worker is
+    # tp=1, so no worker spans two allocations and no NVLink pair is required.
+    # Refresh the job IDs when these allocations expire.
+    allocations:
+      b005: 1210863
+      g211: 1210849
+      g212-a: {node: g212, job: 1210870}
+      g212-b: {node: g212, job: 1210838}
+    workers:
+      - {name: prefill, role: prefill, allocation: g211, tp: 1, system_port: 18080, nixl_port: 15600, event_port: 29080}
+      - {name: decode-1, role: decode, allocation: g212-a, gpu_ids: [0], tp: 1, system_port: 18081, nixl_port: 15601}
+      - {name: decode-2, role: decode, allocation: g212-a, gpu_ids: [1], tp: 1, system_port: 18082, nixl_port: 15602}
+      - {name: decode-3, role: decode, allocation: g212-b, gpu_ids: [0], tp: 1, system_port: 18083, nixl_port: 15603}
+      - {name: decode-4, role: decode, allocation: g212-b, gpu_ids: [1], tp: 1, system_port: 18084, nixl_port: 15604}
   heterogeneous:
     model: dense
     control_node: null

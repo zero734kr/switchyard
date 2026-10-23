@@ -7,3 +7,6 @@ runs/
 .venv/
 *.egg-info/
 
+
+# Refactor worktrees sit inside the repo tree.
+.worktrees/

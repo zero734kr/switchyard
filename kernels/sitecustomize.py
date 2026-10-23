@@ -1,4 +1,9 @@
-"""Opt-in process-local adapters inherited by vLLM worker subprocesses."""
+"""Opt-in process-local adapters inherited by vLLM worker subprocesses.
+
+vLLM imports whatever ``sitecustomize`` it finds on ``PYTHONPATH``; the launcher
+only points ``PYTHONPATH`` at this directory when ``engine.kernels: custom``.
+Adapters are therefore opt-in, per-process, and never touch installed packages.
+"""
 
 import os
 import sys
@@ -6,30 +11,9 @@ import sys
 model = os.environ.get("SWITCHYARD_CUSTOM_KERNELS")
 if model:
     try:
-        for variable in list(os.environ):
-            if variable.startswith("JARVIS_"):
-                os.environ.pop(variable)
-        from importlib.metadata import version
+        from switchyard_kernels.install import install
 
-        if version("vllm") != "0.28.0":
-            raise RuntimeError("kernel adapters require the validated vLLM 0.28.0 API")
-        # Internal flags are adapter details, not user-facing recipe names.
-        os.environ["JARVIS_PROJECTION_PAIR"] = "1"
-        os.environ["JARVIS_GDN_TILED"] = "public"
-        if model == "dense":
-            from jarvis_dense import install
-
-            install()
-        elif model == "moe":
-            from original_moe import install
-
-            install()
-        else:
-            raise ValueError(f"unknown custom kernel model: {model}")
-        from recipe_plugin import install
-
-        install()
-        print(f"SWITCHYARD_KERNEL_ADAPTER_LOADED model={model}", flush=True)
+        install(model)
     except Exception:
         import traceback
 

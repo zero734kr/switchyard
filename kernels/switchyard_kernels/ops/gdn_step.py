@@ -1,4 +1,9 @@
-"""Experimental kernel extracted unchanged from the measured operator probe."""
+"""FP32 GDN recurrent-state update for a single decode token.
+
+This is the prior custom variant of the public packed-decode kernel; the
+adapter currently launches the public kernel with a retuned configuration
+instead, and keeps this one for the algebraic and fused-norm comparisons.
+"""
 
 import triton
 import triton.language as tl

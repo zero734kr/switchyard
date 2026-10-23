@@ -1,27 +1,22 @@
-#!/usr/bin/env python3
-"""Sample live NIXL KV bytes and RDMA link traffic on configured P/D workers.
+"""Sample live NIXL KV bytes and RDMA link traffic on the configured P/D nodes.
 
 The NIXL payload rate comes from the decode workers' cumulative vLLM histogram
-counter. RDMA port counters include all traffic on those host ports, not only
-Switchyard traffic. Link rates are nominal active-port ceilings, not measured
+counter. RDMA port counters include every process on those host ports, not only
+Switchyard traffic. Link rates are nominal active-port ceilings, never measured
 application goodput.
 """
 
-import argparse
-from concurrent.futures import ThreadPoolExecutor
 import json
 import math
-import re
 import shutil
 import subprocess
-import sys
 import time
-from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 from urllib.error import URLError
 from urllib.request import urlopen
 
-from config import DEFAULT_CONFIG, expand, read_config, resolve
-
+from ..paths import expand
+from ..slurm.step import interpreter
 
 METRICS = {
     "bytes": "vllm:nixl_bytes_transferred_sum",
@@ -29,6 +24,7 @@ METRICS = {
     "failed": "vllm:nixl_num_failed_transfers_total",
 }
 
+#: Runs on the remote node through srun; emits one JSON document.
 REMOTE_SAMPLE = r"""
 import glob, json, re, sys, time
 
@@ -80,6 +76,7 @@ print(json.dumps({
 
 
 def metric_sum(text, metric_name):
+    """Sum one Prometheus sample family, ignoring labels and comments."""
     total = 0.0
     count = 0
     for line in text.splitlines():
@@ -100,7 +97,7 @@ def metric_sum(text, metric_name):
 
 
 def scrape_worker(worker):
-    url = f"http://{worker['node']}:{worker['system_port']}/metrics"
+    url = f"http://{worker.node}:{worker.system_port}/metrics"
     try:
         with urlopen(url, timeout=3) as response:
             text = response.read().decode("utf-8", errors="replace")
@@ -114,9 +111,13 @@ def scrape_worker(worker):
 
 def scrape_decoders(workers):
     # Switchyard configures NIXL pull mode: the kv_consumer records each
-    # transfer. Summing producer and consumer would double-count where both
+    # transfer. Summing producer and consumer would double-count wherever both
     # sides expose the same operation.
-    return {w["name"]: scrape_worker(w) for w in workers if w["role"] == "decode"}
+    return {
+        worker.name: scrape_worker(worker)
+        for worker in workers
+        if worker.role == "decode"
+    }
 
 
 def metric_delta(before, after, field):
@@ -168,25 +169,6 @@ def sample_node(job, node, python, window):
     raise RuntimeError(f"{node}: worker sampler returned no JSON data")
 
 
-def summarize_ports(sample):
-    before = {(p["device"], p["port"]): p for p in sample["before"]}
-    after = {(p["device"], p["port"]): p for p in sample["after"]}
-    ports = []
-    for key in sorted(set(before) | set(after)):
-        first, last = before.get(key, {}), after.get(key, {})
-        tx = delta_counter(first.get("tx_bytes"), last.get("tx_bytes"))
-        rx = delta_counter(first.get("rx_bytes"), last.get("rx_bytes"))
-        rate = last.get("rate_gbps") or first.get("rate_gbps")
-        ports.append({
-            "device": key[0], "port": key[1],
-            "state": last.get("state", first.get("state", "unknown")),
-            "rate_gbps": rate, "tx_bytes": tx, "rx_bytes": rx,
-            "tx_gbps": to_gbps(tx, sample["elapsed_s"]),
-            "rx_gbps": to_gbps(rx, sample["elapsed_s"]),
-        })
-    return ports
-
-
 def delta_counter(first, last):
     if first is None or last is None or last < first:
         return None
@@ -199,18 +181,43 @@ def to_gbps(byte_count, seconds):
     return byte_count * 8 / seconds / 1e9
 
 
+def summarize_ports(sample):
+    before = {(port["device"], port["port"]): port for port in sample["before"]}
+    after = {(port["device"], port["port"]): port for port in sample["after"]}
+    ports = []
+    for key in sorted(set(before) | set(after)):
+        first, last = before.get(key, {}), after.get(key, {})
+        tx = delta_counter(first.get("tx_bytes"), last.get("tx_bytes"))
+        rx = delta_counter(first.get("rx_bytes"), last.get("rx_bytes"))
+        ports.append(
+            {
+                "device": key[0],
+                "port": key[1],
+                "state": last.get("state", first.get("state", "unknown")),
+                "rate_gbps": last.get("rate_gbps") or first.get("rate_gbps"),
+                "tx_bytes": tx,
+                "rx_bytes": rx,
+                "tx_gbps": to_gbps(tx, sample["elapsed_s"]),
+                "rx_gbps": to_gbps(rx, sample["elapsed_s"]),
+            }
+        )
+    return ports
+
+
 def active_capacity(ports):
     rates = [
-        p["rate_gbps"]
-        for p in ports
-        if p["state"] == "ACTIVE" and p["rate_gbps"] is not None
+        port["rate_gbps"]
+        for port in ports
+        if port["state"] == "ACTIVE" and port["rate_gbps"] is not None
     ]
     return sum(rates) if rates else None
 
 
-def aggregate_capacity(nodes, node_rows):
-    values = [node_rows[node]["active_capacity_gbps"] for node in nodes]
-    return sum(values) if values and all(value is not None for value in values) else None
+def aggregate_capacity(nodes, rows):
+    values = [rows[node]["active_capacity_gbps"] for node in nodes]
+    return (
+        sum(values) if values and all(value is not None for value in values) else None
+    )
 
 
 def aggregate_rate(ports, field):
@@ -218,26 +225,26 @@ def aggregate_rate(ports, field):
     return sum(values) if values else None
 
 
-def gbps(value):
-    return "n/a" if value is None else f"{value:.2f} Gbps"
+def _node_jobs(recipe, workers):
+    """One allocation per node, for the node-wide NIC counters.
 
-
-def gbps_to_gb_s(value):
-    return "n/a" if value is None else f"{value / 8:.3f} GB/s"
-
-
-def collect(c, recipe, workers, window, fabric_gbps):
+    Several workers may share a node across different allocations, so any
+    allocation covering the node can run the sampler.
+    """
     nodes = {}
-    for worker in workers:
-        node = worker["node"]
-        job = recipe["allocations"][node]
-        if node in nodes and nodes[node] != job:
-            raise ValueError(f"workers on {node} refer to different allocations")
-        nodes[node] = job
+    for worker in sorted(workers, key=lambda w: (w.node, w.allocation)):
+        nodes.setdefault(worker.node, recipe.allocation_for(worker).job)
+    return nodes
 
-    python = expand(c["software"]["venv"]) + "/bin/python"
+
+def collect(launch, window, fabric_gbps=None):
+    """One sampling window: decode-side NIXL counters plus per-node NIC deltas."""
+    recipe = launch.recipe
+    workers = recipe.workers
+    nodes = _node_jobs(recipe, workers)
+    python = interpreter(launch.settings.software)
     if not shutil.which("srun"):
-        raise RuntimeError("Run this script on a Jarvis host where srun is available")
+        raise RuntimeError("run this command on a Jarvis host where srun is available")
 
     with ThreadPoolExecutor(max_workers=max(1, len(nodes))) as pool:
         network_jobs = {
@@ -249,12 +256,13 @@ def collect(c, recipe, workers, window, fabric_gbps):
         time.sleep(window)
         after = scrape_decoders(workers)
         metric_elapsed = time.monotonic() - started
-        network_samples = {node: future.result() for node, future in network_jobs.items()}
+        network_samples = {
+            node: future.result() for node, future in network_jobs.items()
+        }
 
     kv_bytes, byte_issues = metric_delta(before, after, "bytes")
     xfer_seconds, time_issues = metric_delta(before, after, "xfer_seconds")
     failed, failure_issues = metric_delta(before, after, "failed")
-    kv_gbps = to_gbps(kv_bytes, metric_elapsed)
     active_gbps = (
         kv_bytes * 8 / xfer_seconds / 1e9
         if kv_bytes is not None and xfer_seconds and xfer_seconds > 0
@@ -263,72 +271,86 @@ def collect(c, recipe, workers, window, fabric_gbps):
 
     roles_by_node = {}
     for worker in workers:
-        roles_by_node.setdefault(worker["node"], set()).add(worker["role"])
-    node_rows = {}
+        roles_by_node.setdefault(worker.node, set()).add(worker.role)
+    rows = {}
     for node, sample in network_samples.items():
         ports = summarize_ports(sample)
-        node_rows[node] = {
+        rows[node] = {
             "roles": sorted(roles_by_node[node]),
             "elapsed_s": sample["elapsed_s"],
             "ports": ports,
             "active_capacity_gbps": active_capacity(ports),
-            "tx_bytes": sum(p["tx_bytes"] or 0 for p in ports),
-            "rx_bytes": sum(p["rx_bytes"] or 0 for p in ports),
+            "tx_bytes": sum(port["tx_bytes"] or 0 for port in ports),
+            "rx_bytes": sum(port["rx_bytes"] or 0 for port in ports),
             "tx_gbps": aggregate_rate(ports, "tx_gbps"),
             "rx_gbps": aggregate_rate(ports, "rx_gbps"),
         }
 
-    prefill_nodes = sorted({w["node"] for w in workers if w["role"] == "prefill"})
-    decode_nodes = sorted({w["node"] for w in workers if w["role"] == "decode"})
-    prefill_cap = aggregate_capacity(prefill_nodes, node_rows)
-    decode_cap = aggregate_capacity(decode_nodes, node_rows)
+    prefill_nodes = sorted({w.node for w in workers if w.role == "prefill"})
+    decode_nodes = sorted({w.node for w in workers if w.role == "decode"})
+    prefill_capacity = aggregate_capacity(prefill_nodes, rows)
+    decode_capacity = aggregate_capacity(decode_nodes, rows)
     ceiling = None
-    if prefill_cap is not None and decode_cap is not None:
-        limits = [prefill_cap, decode_cap]
+    if prefill_capacity is not None and decode_capacity is not None:
+        limits = [prefill_capacity, decode_capacity]
         if fabric_gbps is not None:
             limits.append(fabric_gbps)
         ceiling = min(limits)
     same_node = set(prefill_nodes) == set(decode_nodes) and len(prefill_nodes) == 1
+    target = launch.settings.fabric.target_utilization
 
     return {
-        "recipe": recipe["name"],
+        "recipe": recipe.name,
         "window_seconds": window,
         "kv_payload": {
             "source": "decode-worker vllm:nixl_bytes_transferred_sum",
             "bytes": kv_bytes,
-            "wall_gbps": kv_gbps,
+            "wall_gbps": to_gbps(kv_bytes, metric_elapsed),
             "active_transfer_gbps": active_gbps,
             "failed_transfers": failed,
             "issues": sorted(set(byte_issues + time_issues + failure_issues)),
         },
-        "nodes": node_rows,
+        "nodes": rows,
         "capacity": {
-            "prefill_egress_nominal_gbps": prefill_cap,
-            "decode_ingress_nominal_gbps": decode_cap,
+            "prefill_egress_nominal_gbps": prefill_capacity,
+            "decode_ingress_nominal_gbps": decode_capacity,
             "shared_fabric_gbps": fabric_gbps,
             "end_to_end_nominal_ceiling_gbps": ceiling,
-            "target_utilization": c["fabric"]["target_utilization"],
-            "target_gbps": ceiling * c["fabric"]["target_utilization"] if ceiling is not None else None,
+            "target_utilization": target,
+            "target_gbps": ceiling * target if ceiling is not None else None,
             "fabric_ceiling_is_known": fabric_gbps is not None,
             "same_node_p_and_d": same_node,
         },
     }
 
 
-def print_report(result, as_json=False):
-    if as_json:
-        print(json.dumps(result, indent=2))
-        return
-    print(f"Recipe: {result['recipe']}  |  sample window: {result['window_seconds']:.1f}s")
+def gbps(value):
+    return "n/a" if value is None else f"{value:.2f} Gbps"
+
+
+def gbps_to_gb_s(value):
+    return "n/a" if value is None else f"{value / 8:.3f} GB/s"
+
+
+def report(result):
+    """Human-readable version of :func:`collect`."""
+    print(
+        f"Recipe: {result['recipe']}  |  sample window: {result['window_seconds']:.1f}s"
+    )
     kv = result["kv_payload"]
     print("\nNIXL KV payload (decode consumer metrics)")
     if kv["bytes"] is None:
         print("  unavailable; check the workers' /metrics endpoints and NIXL metrics")
     else:
         print(f"  transferred: {kv['bytes'] / 1e9:.3f} GB")
-        print(f"  wall-window rate: {gbps_to_gb_s(kv['wall_gbps'])} ({gbps(kv['wall_gbps'])})")
-        print(f"  transfer-active aggregate rate: {gbps_to_gb_s(kv['active_transfer_gbps'])}")
-        print(f"  failed transfers in window: {kv['failed'] if kv['failed'] is not None else 'n/a'}")
+        print(
+            f"  wall-window rate: {gbps_to_gb_s(kv['wall_gbps'])} "
+            f"({gbps(kv['wall_gbps'])})"
+        )
+        active = gbps_to_gb_s(kv["active_transfer_gbps"])
+        print(f"  transfer-active aggregate rate: {active}")
+        failed = kv["failed"] if kv["failed"] is not None else "n/a"
+        print(f"  failed transfers in window: {failed}")
     for issue in kv["issues"]:
         print(f"  note: {issue}")
 
@@ -347,54 +369,44 @@ def print_report(result, as_json=False):
                 f"RX {gbps_to_gb_s(port['rx_gbps'])}"
             )
 
-    cap = result["capacity"]
+    capacity = result["capacity"]
     print("\nDoubleword fabric check: min(P egress, D ingress, shared fabric)")
-    print(f"  prefill egress nominal: {gbps(cap['prefill_egress_nominal_gbps'])}")
-    print(f"  decode ingress nominal: {gbps(cap['decode_ingress_nominal_gbps'])}")
-    if cap["shared_fabric_gbps"] is None:
+    print(f"  prefill egress nominal: {gbps(capacity['prefill_egress_nominal_gbps'])}")
+    print(f"  decode ingress nominal: {gbps(capacity['decode_ingress_nominal_gbps'])}")
+    if capacity["shared_fabric_gbps"] is None:
         print("  shared fabric ceiling: unknown; pass --fabric-gbps if known")
     else:
-        print(f"  shared fabric ceiling: {gbps(cap['shared_fabric_gbps'])}")
-    print(f"  end-to-end nominal ceiling: {gbps(cap['end_to_end_nominal_ceiling_gbps'])}")
-    print(f"  configured target ({cap['target_utilization']:.0%}): {gbps(cap['target_gbps'])}")
-    if cap["same_node_p_and_d"]:
-        print("  P and D are on the same node; this recipe does not exercise cross-node fabric transfer.")
-    elif not cap["fabric_ceiling_is_known"]:
-        print("  This is an endpoint NIC ceiling only; switch capacity/oversubscription is not discovered here.")
-    if kv["wall_gbps"] is not None and cap["end_to_end_nominal_ceiling_gbps"]:
-        ratio = kv["wall_gbps"] / cap["end_to_end_nominal_ceiling_gbps"] * 100
-        print(f"  NIXL payload / nominal ceiling: {ratio:.2f}% (wire utilization is shown by NIC counters)")
-    print("  NIC TX/RX counters are host-wide RDMA traffic, not process-isolated KV bytes.")
-    print("  The nominal link ceiling is not measured RDMA goodput; use a separate fabric benchmark for that.")
+        print(f"  shared fabric ceiling: {gbps(capacity['shared_fabric_gbps'])}")
+    ceiling = gbps(capacity["end_to_end_nominal_ceiling_gbps"])
+    print(f"  end-to-end nominal ceiling: {ceiling}")
+    print(
+        f"  configured target ({capacity['target_utilization']:.0%}): "
+        f"{gbps(capacity['target_gbps'])}"
+    )
+    if capacity["same_node_p_and_d"]:
+        print(
+            "  P and D are on the same node; this recipe does not exercise "
+            "cross-node fabric transfer."
+        )
+    elif not capacity["fabric_ceiling_is_known"]:
+        print(
+            "  This is an endpoint NIC ceiling only; switch capacity/oversubscription "
+            "is not discovered here."
+        )
+    if kv["wall_gbps"] is not None and capacity["end_to_end_nominal_ceiling_gbps"]:
+        ratio = kv["wall_gbps"] / capacity["end_to_end_nominal_ceiling_gbps"] * 100
+        print(
+            f"  NIXL payload / nominal ceiling: {ratio:.2f}% "
+            "(wire utilization is shown by NIC counters)"
+        )
+    print(
+        "  NIC TX/RX counters are host-wide RDMA traffic, "
+        "not process-isolated KV bytes."
+    )
+    print(
+        "  The nominal link ceiling is not measured RDMA goodput; use a separate "
+        "fabric benchmark for that."
+    )
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("recipe", nargs="?", default="initial-h100")
-    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
-    parser.add_argument("--model", choices=("dense", "moe"))
-    parser.add_argument("--window", type=float, default=10.0, help="measurement window in seconds")
-    parser.add_argument("--fabric-gbps", type=float, help="known shared path capacity in Gbps")
-    parser.add_argument("--json", action="store_true", help="emit machine-readable JSON")
-    args = parser.parse_args()
-    if args.window <= 0:
-        parser.error("--window must be positive")
-    if args.fabric_gbps is not None and args.fabric_gbps <= 0:
-        parser.error("--fabric-gbps must be positive")
-    config = read_config(args.config)
-    try:
-        recipe, _model, _key = resolve(config, args.recipe, args.model)
-    except (KeyError, ValueError) as error:
-        parser.error(str(error))
-    recipe = {**recipe, "name": args.recipe}
-    try:
-        result = collect(config, recipe, recipe["workers"], args.window, args.fabric_gbps)
-    except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as error:
-        print(f"fabric monitor failed: {error}", file=sys.stderr)
-        return 1
-    print_report(result, args.json)
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
+__all__ = ["METRICS", "collect", "expand", "report"]

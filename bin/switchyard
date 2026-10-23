@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Entry point for Slurm steps, which cannot rely on an activated environment.
+set -euo pipefail
+root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+export PYTHONPATH="$root/src${PYTHONPATH:+:$PYTHONPATH}"
+exec "${SWITCHYARD_PYTHON:-python3}" -m switchyard "$@"

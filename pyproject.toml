@@ -1,6 +1,28 @@
 [project]
 name = "switchyard"
-version = "0.2.0"
-description = "Jarvis Slurm cross-node inference recipes and Triton kernels"
+version = "0.3.0"
+description = "Slurm-native cross-node LLM serving recipes with Dynamo and vLLM"
 requires-python = ">=3.12"
 dependencies = ["PyYAML>=6.0,<7"]
+
+[project.scripts]
+switchyard = "switchyard.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/switchyard"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+src = ["src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "UP", "B", "SIM", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+# The Triton kernels mirror upstream argument order and shape checks verbatim.
+"kernels/**" = ["F401", "E731"]
