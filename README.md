@@ -8,6 +8,16 @@ A short Qwen3.6-27B BF16 run reached **755 output tokens/s**, **8.56 ms mean TPO
 
 These are provisional serving results. See [RESULTS.md](RESULTS.md) for the method and [kernels/README.md](kernels/README.md) for operator results and dispatch evidence.
 
+## Maybe Kubernetes?
+
+I've been thinking about moving Switchyard to Kubernetes at some point. I wanted to experiment with NVSentinel and Node Problem Detector for GPU/node health monitoring, to potentially implement auto remediation and autoregressive fallback, and maybe Dynamo Planner for dynamically adjusting P/D ratios.
+
+I'm not entirely sure how I'd make Kubernetes work with Stevens' Slurm cluster yet though. One idea is to run Kubernetes on my own server and connect it to Slurm if Slurm/Stevens exposes an API for it.
+
+I'm also a bit hesitant because this would make the project a lot bigger than I originally intended. I've already spent way too much time on it this week at the expense of other commitments, and I have other todos I had in mind.
+
+Still, I'll probably need to learn how to deploy LLMs on Kubernetes eventually anyway, so I might give it a shot. Maybe after finals or after I get the internship
+
 ## Architecture
 
 ```mermaid
