@@ -140,8 +140,14 @@ def build_parser():
     )
 
     commands.add_parser("inventory", help="print GPU, network and RDMA topology")
-    commands.add_parser(
+    bootstrap = commands.add_parser(
         "bootstrap", help="install the pinned etcd and nats-server binaries"
+    )
+    bootstrap.add_argument(
+        "--config",
+        type=Path,
+        default=paths.DEFAULT_CONFIG,
+        help="path to config.yaml",
     )
     return parser
 
@@ -302,7 +308,7 @@ def _bootstrap(args):
 
 
 def _inventory(_args):
-    ops.inventory.inventory()
+    ops.inventory()
     return 0
 
 
