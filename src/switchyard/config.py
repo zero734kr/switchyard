@@ -20,6 +20,7 @@ ROLES = ("prefill", "decode")
 ROUTER_MODES = ("kv", "round-robin")
 HCA_SELECTION = ("all", "local")
 KERNEL_MODES = ("baseline", "custom")
+SPECULATIVE_METHODS = ("mtp", "dflash")
 
 
 @dataclass(frozen=True)
@@ -49,11 +50,18 @@ class Engine:
     max_model_len: int
     max_num_seqs: int
     max_num_batched_tokens: int
-    mtp_tokens: int
+    speculative_tokens: int
+    speculative_method: str
+    speculative_model: str | None
     prefix_caching: bool
     gdn_prefill_backend: str
     kernels: str
     enforce_eager: bool = False
+
+    @property
+    def mtp_tokens(self):
+        """Backward-compatible alias for the former MTP-only token setting."""
+        return self.speculative_tokens if self.speculative_method == "mtp" else 0
 
 
 @dataclass(frozen=True)
@@ -287,6 +295,35 @@ def _engine(raw):
         _integer(raw.get(key), f"engine.{key}", 1)
     if raw.get("kernels") not in KERNEL_MODES:
         raise ConfigError("invalid memory utilization or kernels selection")
+    speculative_method = raw.get("speculative_method", "mtp")
+    if speculative_method not in SPECULATIVE_METHODS:
+        raise ConfigError(
+            "engine.speculative_method must be one of "
+            f"{', '.join(SPECULATIVE_METHODS)}"
+        )
+    speculative_model = raw.get("speculative_model")
+    if speculative_model is not None and (
+        not isinstance(speculative_model, str) or not speculative_model.strip()
+    ):
+        raise ConfigError("engine.speculative_model must be a non-empty string")
+    speculative_tokens = _integer(
+        raw.get("speculative_tokens", raw.get("mtp_tokens", 0)),
+        "engine.speculative_tokens",
+        0,
+    )
+    if speculative_method == "dflash":
+        if speculative_model is None:
+            raise ConfigError(
+                "engine.speculative_model is required for DFlash speculation"
+            )
+        if speculative_tokens == 0:
+            raise ConfigError(
+                "engine.speculative_tokens must be positive for DFlash speculation"
+            )
+    elif speculative_model is not None:
+        raise ConfigError(
+            "engine.speculative_model is only valid with DFlash speculation"
+        )
     return Engine(
         dtype=str(raw.get("dtype", "bfloat16")),
         gpu_memory_utilization=_fraction(
@@ -296,7 +333,9 @@ def _engine(raw):
         max_model_len=raw["max_model_len"],
         max_num_seqs=raw["max_num_seqs"],
         max_num_batched_tokens=raw["max_num_batched_tokens"],
-        mtp_tokens=_integer(raw.get("mtp_tokens", 0), "engine.mtp_tokens", 0),
+        speculative_tokens=speculative_tokens,
+        speculative_method=speculative_method,
+        speculative_model=speculative_model,
         prefix_caching=bool(raw.get("prefix_caching", False)),
         gdn_prefill_backend=str(raw.get("gdn_prefill_backend", "flashinfer")),
         kernels=raw["kernels"],

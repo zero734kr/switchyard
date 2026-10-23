@@ -171,7 +171,8 @@ def _config(args):
     if args.check:
         engine = settings.engine
         print(
-            f"{args.recipe}: valid; MTP={engine.mtp_tokens}, "
+            f"{args.recipe}: valid; speculation={engine.speculative_method} "
+            f"({engine.speculative_tokens} tokens), "
             f"prefix cache={engine.prefix_caching}, kernels={engine.kernels}"
         )
         return 0

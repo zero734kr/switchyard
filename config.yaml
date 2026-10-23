@@ -20,7 +20,12 @@ engine:
   max_model_len: 32768
   max_num_seqs: 32
   max_num_batched_tokens: 8192
-  mtp_tokens: 3
+  speculative_method: mtp
+  speculative_tokens: 3
+  speculative_model: null
+  # For Qwen3.8 DFlash2, point models.dense.path at the full target checkpoint,
+  # then use: speculative_method: dflash, speculative_tokens: 7,
+  # speculative_model: z-lab/Qwen3.8-27B-DFlash2
   prefix_caching: true
   gdn_prefill_backend: flashinfer
   # Candidate adapters remain selectable; their incremental cross-node/MTP gain is not yet verified.

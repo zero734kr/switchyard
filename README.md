@@ -28,7 +28,7 @@ The default model is Qwen3.6-27B; Qwen3.6-35B-A3B is selectable. Recipes enable 
 - Dynamo routes requests to vLLM prefill and decode workers; NIXL transfers KV and recurrent state across nodes.
 - Recipes use existing Slurm allocations and support multiple jobs on one node. CPU/NUMA placement is selected after allocation.
 - Qwen3.6-27B is the default; use `--model moe` for Qwen3.6-35B-A3B.
-- MTP, prefix caching, tool parsing, and guarded Triton kernels are configurable in `config.yaml`.
+- MTP or DFlash2 speculation, prefix caching, tool parsing, and guarded Triton kernels are configurable in `config.yaml`.
 
 ## Run on Jarvis
 

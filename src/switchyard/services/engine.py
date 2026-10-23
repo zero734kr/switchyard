@@ -21,8 +21,11 @@ def kv_transfer_config(role):
     )
 
 
-def speculative_config(mtp_tokens):
-    return json.dumps({"method": "mtp", "num_speculative_tokens": mtp_tokens})
+def speculative_config(method, tokens, model=None):
+    config = {"method": method, "num_speculative_tokens": tokens}
+    if model is not None:
+        config["model"] = expand(model)
+    return json.dumps(config)
 
 
 def kv_events_config(port):
@@ -77,8 +80,15 @@ def args(launch, worker):
         values.append("--enable-prefix-caching")
     if engine.enforce_eager:
         values.append("--enforce-eager")
-    if engine.mtp_tokens:
-        values += ["--speculative-config", speculative_config(engine.mtp_tokens)]
+    if engine.speculative_tokens:
+        values += [
+            "--speculative-config",
+            speculative_config(
+                engine.speculative_method,
+                engine.speculative_tokens,
+                engine.speculative_model,
+            ),
+        ]
     if worker.role == "prefill" and worker.event_port is not None:
         values += ["--kv-events-config", kv_events_config(worker.event_port)]
     return values

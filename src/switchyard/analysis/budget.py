@@ -34,7 +34,8 @@ class Budget:
 SCOPE = (
     "Aggregate TP=1 logical payload; excludes block padding unless supplied, "
     "replicated transfers, protocol overhead and contention. Confirm connector "
-    "state copies, dtype and actual bytes before choosing P/D ratio."
+    "state copies, dtype and actual bytes before choosing P/D ratio. DFlash "
+    "draft and verification state is not modeled."
 )
 
 
