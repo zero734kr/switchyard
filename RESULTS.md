@@ -19,13 +19,7 @@ These H100 runs used `scripts/benchmark.sh` and `vllm bench serve` with the Open
 
 The server's `/tokenize` endpoint was unavailable, so requested input lengths were nominal. Actual aggregate inputs were **94,009** and **11,610** tokens respectively; outputs were exactly **3,072** and **49,152**. Durations were 16.1000 s and 65.1014 s. Median TTFT was 2160.50 / 390.29 ms; median TPOT was 8.07 / 8.33 ms. Throughput is aggregate output tokens divided by benchmark duration, not per-request generation speed. MTP emits chunks, so ITL must not be substituted for TPOT.
 
-A [numeric summary](results/h100-cross-node-20261021.json) is included in the repository. The source JSON files and configuration snapshot remain under `runs/smoke-h100-retry1/` on Jarvis (raw runs are ignored by Git). No task-success or output-quality evaluation was performed in this synthetic smoke test. Tool parsing was enabled but tool execution was not benchmarked. No new 35B-A3B cross-node result is claimed.
-
-The later `initial-h200-pool` recipe and captured GPU/HCA topology document the available deployment layout; they are not a new H200 performance benchmark. The 755 tok/s figure above remains the latest measured serving result in this repository.
-
-### What remains
-
-Compare the batch extension against matched baseline/public/custom serving runs with quality checks. Measure effective NIXL transfer cost before P:D ratio tuning and heterogeneous H100/H200 trials. The policy-repair agent benchmark is separate work. Earlier measurements below used different hardware, topology, and MTP settings and are not a matched baseline for the 755 tok/s result.
+A [numeric summary](results/h100-cross-node-20261021.json) is included in the repository.
 
 ---
 
