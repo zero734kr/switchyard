@@ -20,11 +20,13 @@ The [755 tok/s P/D + MTP result](../RESULTS.md) predates this batch extension. I
 
 ## Integration
 
-Set `engine.kernels: custom` in `config.yaml` to load process-local adapters through `sitecustomize.py`; `baseline` disables them. Integration is pinned to vLLM 0.28.0. Shape/layout guards retain public fallbacks; request concurrency differs from kernel token-row count under MTP and CUDA graphs.
+Set `engine.kernels: custom` in `config.yaml` to add `kernels/` to worker `PYTHONPATH`; `sitecustomize.py` then installs process-local adapters. `baseline` leaves vLLM unpatched. The refactored layout separates vLLM integration in `switchyard_kernels/adapters/` from Triton operators in `switchyard_kernels/ops/`. Integration is pinned to vLLM 0.28.0. Shape/layout guards retain public fallbacks; request concurrency differs from kernel token-row count under MTP and CUDA graphs.
 
-- [`jarvis_dense.py`](jarvis_dense.py): dense batch-1 and batch 2–16 MLP paths.
-- [`original_moe.py`](original_moe.py): single-token BF16 routed-expert path for Qwen3.6-35B-A3B.
-- [`pair_kernel.py`](pair_kernel.py) and [`recipe_plugin.py`](recipe_plugin.py): GDN projection pairing and recurrence configuration.
+- [`switchyard_kernels/ops/gate_up.py`](switchyard_kernels/ops/gate_up.py): dense batch-1 and batch 2–16 MLP paths.
+- [`switchyard_kernels/ops/moe_experts.py`](switchyard_kernels/ops/moe_experts.py): single-token BF16 routed-expert path for Qwen3.6-35B-A3B.
+- [`switchyard_kernels/ops/projection_pair.py`](switchyard_kernels/ops/projection_pair.py) and [`switchyard_kernels/adapters/gdn.py`](switchyard_kernels/adapters/gdn.py): GDN projection pairing and recurrence configuration.
+
+The current GDN recurrence uses a retuned public vLLM kernel. The shared-expert gate operator is retained as a measured operator but is not installed by the serving adapter.
 
 ## References
 

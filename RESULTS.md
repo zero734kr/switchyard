@@ -1,6 +1,6 @@
 # Results
 
-## Provisional cross-node H100 results
+## Latest result: provisional cross-node H100 serving smoke
 
 Measured 2026-10-21 (America/New_York). Qwen3.6-27B BF16, Dynamo 1.5.0 / vLLM 0.28.0 / NIXL 1.3.2; MTP 3, prefix caching, FlashInfer GDN prefill, 32K context limit, 32 maximum sequences, 8192 batched tokens, GPU memory utilization 0.88.
 
@@ -15,11 +15,13 @@ One H100 NVL (~94 GiB) on g003 performed prefill and one on g004 performed decod
 
 ### Method and evidence
 
-The unchanged `scripts/benchmark.sh` used `vllm bench serve`, the OpenAI completions backend, random inputs, temperature 0, `ignore-eos`, one warmup per workload, and detailed TTFT/TPOT/ITL/E2E output. Requests ran through the gateway and cross-node Dynamo/NIXL path. Worker logs showed prefill activity on the producer and generation with externally cached prefixes on the consumer. Adapter import/configuration markers alone do not prove decode dispatch; graph capture can also produce markers.
+These H100 runs used `scripts/benchmark.sh` and `vllm bench serve` with the OpenAI completions backend, random inputs, temperature 0, `ignore-eos`, one warmup per workload, and detailed TTFT/TPOT/ITL/E2E output. The current `switchyard bench` command carries the same cases and vLLM arguments. Requests ran through the gateway and cross-node Dynamo/NIXL path. Worker logs showed prefill activity on the producer and generation with externally cached prefixes on the consumer. Adapter import/configuration markers alone do not prove decode dispatch; graph capture can also produce markers.
 
 The server's `/tokenize` endpoint was unavailable, so requested input lengths were nominal. Actual aggregate inputs were **94,009** and **11,610** tokens respectively; outputs were exactly **3,072** and **49,152**. Durations were 16.1000 s and 65.1014 s. Median TTFT was 2160.50 / 390.29 ms; median TPOT was 8.07 / 8.33 ms. Throughput is aggregate output tokens divided by benchmark duration, not per-request generation speed. MTP emits chunks, so ITL must not be substituted for TPOT.
 
 A [numeric summary](results/h100-cross-node-20261021.json) is included in the repository. The source JSON files and configuration snapshot remain under `runs/smoke-h100-retry1/` on Jarvis (raw runs are ignored by Git). No task-success or output-quality evaluation was performed in this synthetic smoke test. Tool parsing was enabled but tool execution was not benchmarked. No new 35B-A3B cross-node result is claimed.
+
+The later `initial-h200-pool` recipe and captured GPU/HCA topology document the available deployment layout; they are not a new H200 performance benchmark. The 755 tok/s figure above remains the latest measured serving result in this repository.
 
 ### What remains
 
