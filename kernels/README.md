@@ -7,16 +7,27 @@ I started from **DeepFusionKernel**'s published fusion ideas and tuned Triton ke
 | Feature | Change | Measured contribution |
 | --- | --- | --- |
 | **Dense MLP, batch 1** | Fuse gate/up + SwiGLU; specialize for 5120 × 17408 with BF16 intermediate rounding. | H200 NVL: **85.3–85.4 µs** vs public DeepFusionKernel A2 **88.2 µs** (~3% lower latency), or public matmul + activation **98.0–98.6 µs** (~13% lower). |
-| **Dense MLP, batches 2–16** | Reuse weight tiles across token rows; fall back above 16. | H100 NVL synthetic operator: **~9–12% faster** at tested batches 2, 4, 8, 16, reported by the batch-tuning session. |
+| **Dense MLP, batches 2–16** | Reuse weight tiles across token rows; fall back above 16. | H200 NVL: **8.1–9.4% lower latency** vs public matmul + activation at tested token-row counts 2, 4, 8, 16; details below. |
 | **MoE routed experts** | Fuse gate/up + SwiGLU, then down projection + top-k reduction; bypass single-token sorting/padding. | H200 NVL synthetic operator: **25.39 → 18.50 µs (1.37×)** vs installed vLLM `fused_experts`. |
 | **GDN projection pair** | Compute QKVZ and BA in one Triton launch. | **Two projection launches → one**; individual serving gain not yet measured. |
 | **Public GDN recurrence tuning** | Tune the existing public kernel configuration. | Individual serving gain not yet measured; credited as public-kernel tuning. |
 
 **Scope:** these are operator measurements, not additive model speedups. The batch-1 comparison screened 144 public A2 vector configurations on merged row-major weights; it does not cover every upstream kernel. The MoE test rotated 16 synthetic activation/routing sets and excluded routing time on both sides.
 
-**Serving check:** an MTP=3 smoke selected the batched dense path at 4, 8, and 16 and completed concurrent requests. Model-wide performance and quality validation remain pending.
+## Dense operator check on H200
 
-The [755 tok/s P/D + MTP result](../RESULTS.md) predates this batch extension. It does not isolate the kernels' contribution. MTP and prefix caching are serving features, not custom Triton optimizations.
+BF16 gate/up + SwiGLU, hidden size 5,120 and intermediate size 17,408:
+
+| Token rows | Public matmul + activation | Custom Triton | Latency reduction |
+| --- | ---: | ---: | ---: |
+| 2 | 97.65 µs | **88.46 µs** | **9.4%** |
+| 4 | 97.38 µs | **88.53 µs** | **9.1%** |
+| 8 | 97.56 µs | **89.15 µs** | **8.6%** |
+| 16 | 98.09 µs | **90.13 µs** | **8.1%** |
+
+Measured October 24, 2026 on one H200 NVL, PyTorch 2.13.0+cu130 and Triton 3.7.1. Three warmed timing rounds used five CUDA-graph samples of 120 launches each, with randomized implementation order. Values are medians of the round medians. The public reference is `F.linear` plus installed vLLM CUDA `silu_and_mul`, not the full compiled model or DeepFusionKernel. Three activation seeds per shape passed finite-output and reference-error checks, with exact within-implementation repeats. [Measurements](../results/h200-dense-operator-20261024.json).
+
+**Serving scope:** a separate Qwen3.8-27B + DFlash2 decode profile on one H200 verified 1,536 `_gate_up_batched` GPU calls after compilation-cache isolation. Operator gains did not bring end-to-end improvements in every runs, as speculative verification can exceed 16 token rows and use public fallbacks.
 
 ## Integration
 

@@ -1,67 +1,32 @@
 # Results
 
-## Cross-node H200 serving run — 2026-10-23
+## Five-H200 serving: throughput and latency
 
-Measured 2026-10-23 (America/New_York). Qwen3.8-27B BF16, Dynamo 1.5.0 / vLLM 0.28.0 / NIXL 1.3.2; DFlash 2 with 7 speculative tokens, prefix caching, FlashInfer GDN prefill, 32K context limit, 32 maximum sequences, 8192 batched tokens, GPU memory utilization 0.97.
+**6.6–6.7K output tokens/s at concurrency 64**, with mean TTFT around **0.9 s** and observed p99 around **3 s**. Reducing concurrency to 32 delivered **4.94K output tokens/s** and TTFT improvements with **4.64 ms mean TPOT**.
 
-One H200 NVL on g211 performed prefill and another on g211 performed decode. b005 (compute node without GPU) hosted the gateway/frontend/etcd/NATS. I used qwen3.8-27b model with DFlash 2 speculation this time, but the base architecture of qwen3.8-27b remains the same as qwen3.6-27b so the gain comes solely from using H200 instead of H100 + DFlash 2 instead of native MTP.
+Measured on October 24, 2026 (America/New_York): **Qwen3.8-27B BF16**, five H200 NVL GPUs across two GPU nodes, **one prefill and four decode workers**, TP=1 per worker, and a separate CPU-only node for Dynamo frontend, etcd and NATS.
 
-| Workload | Completed / concurrency | Aggregate input / output tokens | Output tok/s | Mean TTFT | Mean TPOT | p99 TTFT / TPOT |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Prefill-heavy | 12 / 4 | 94,009 / 3,072 | 313.01 | 1,932.46 ms | 4.64 ms | 3,013.54 / 8.49 ms |
-| Decode-heavy | 24 / 8 | 11,610 / 49,152 | **1,282.89** | **298.59 ms** | **4.34 ms** | 502.76 / 9.91 ms |
-
-Raw benchmark records: [prefill-heavy](results/cross-node-20261023/prefill-heavy.json) · [decode-heavy](results/cross-node-20261023/decode-heavy.json).
-
----
-
-## Earlier Qwen3.6-27B H100 serving smoke — 2026-10-21
-
-Measured 2026-10-21 (America/New_York). Qwen3.6-27B BF16, Dynamo 1.5.0 / vLLM 0.28.0 / NIXL 1.3.2; MTP 3, prefix caching, FlashInfer GDN prefill, 32K context limit, 32 maximum sequences, 8192 batched tokens, GPU memory utilization 0.88.
-
-One H100 NVL (~94 GiB) on g003 performed prefill and one on g004 performed decode. g001 hosted the gateway/frontend/etcd/NATS; its allocated GPU was not used for inference. All 36 measured requests completed without failures.
-
-| Workload | Nominal input → output | Concurrency / requests | Output tok/s | Mean TTFT | Mean TPOT |
-| --- | --- | --- | ---: | ---: | ---: |
-| Prefill-heavy | 8192 → 256 | 4 / 12 | 190.81 | 2702.67 ms | 8.80 ms |
-| Decode-heavy | 512 → 2048 | 8 / 24 | **755.01** | **515.74 ms** | **8.56 ms** |
-
-**Provisional:** one run per workload, with no matched baseline/public/custom comparison or task-quality evaluation. Adapter loading did not establish custom decode execution in this run. The later [batch 2–16 kernel smoke](kernels/README.md) is separate evidence.
-
-### Method and evidence
-
-These H100 runs used `scripts/benchmark.sh` and `vllm bench serve` with the OpenAI completions backend, random inputs, temperature 0, `ignore-eos`, one warmup per workload, and detailed TTFT/TPOT/ITL/E2E output. The current `switchyard bench` command carries the same cases and vLLM arguments. Requests ran through the gateway and cross-node Dynamo/NIXL path. Worker logs showed prefill activity on the producer and generation with externally cached prefixes on the consumer. Adapter import/configuration markers alone do not prove decode dispatch; graph capture can also produce markers.
-
-The server's `/tokenize` endpoint was unavailable, so requested input lengths were nominal. Actual aggregate inputs were **94,009** and **11,610** tokens respectively; outputs were exactly **3,072** and **49,152**. Durations were 16.1000 s and 65.1014 s. Median TTFT was 2160.50 / 390.29 ms; median TPOT was 8.07 / 8.33 ms. Throughput is aggregate output tokens divided by benchmark duration, not per-request generation speed. MTP emits chunks, so ITL must not be substituted for TPOT.
-
-A [numeric summary](results/h100-cross-node-20261021.json) is included in the repository.
-
----
-
-## Historical measurements (previous deployment)
-
-### H200 + H100 run: 2026-09-29
-
-`runs/h100-128-completions-20260929/` completed with no failed benchmark requests. It used Qwen3.6-27B, bf16, MTP disabled, CUDA 13, Dynamo 1.5.0, vLLM 0.28.0, and deterministic completion requests (`temperature=0`, `ignore_eos=true`). Each target received the same token lengths, concurrency, request count, and random seed.
-
-| Target | Hardware | Workload | Success | Output tok/s | Mean TTFT | Mean TPOT |
-| --- | --- | --- | ---: | ---: | ---: | ---: |
-| `h200-pd` | 2 × H200 NVL | 8,192 in / 256 out | 12 / 12 | 94.36 | 5.79 s | 17.22 ms |
-| `h100-1p2d` | 3 × H100 SXM | 8,192 in / 256 out | 12 / 12 | 80.99 | 7.30 s | 20.70 ms |
-| `heterogeneous-pool` | 5 GPUs total | 8,192 in / 256 out | 12 / 12 | 161.39 | 851 ms | 18.41 ms |
-| `h200-pd` | 2 × H200 NVL | 512 in / 2,048 out | 24 / 24 | 440.08 | 886 ms | 17.74 ms |
-| `h100-1p2d` | 3 × H100 SXM | 512 in / 2,048 out | 24 / 24 | 369.62 | 1.23 s | 20.85 ms |
-| `heterogeneous-pool` | 5 GPUs total | 512 in / 2,048 out | 24 / 24 | 385.71 | 587 ms | 18.72 ms |
-
-The gateway sent six prefill-heavy and twelve decode-heavy completions to each backend, verified from unique frontend request IDs. The pooled prefill case reused deterministic prompts after the direct runs, so its prefix caches could be warm. The five-GPU pool and direct targets also used different GPU counts; this is routing evidence, not a matched hardware ranking.
-
-### Producer/consumer role migration: 2026-09-29
-
-`runs/role-smoke-20260929T141608Z/` verified the current Dynamo role split on the H200 P/D deployment. The prefill worker used `kv_producer` and the decode worker used `kv_consumer`. One completion transferred 195.8 MB of KV data, and Dynamo recorded separate prefill and decode worker IDs for completed benchmark requests. The run logs contain no `kv_both` role warning.
-
-| Workload | Success | Output tok/s | Mean TTFT | Mean TPOT | Prior H200 output tok/s |
+| Workload | Concurrency · completed | Output tok/s | Mean TTFT | p99 TTFT | Mean TPOT |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| 8,192 in / 256 out | 12 / 12 | 94.29 | 5.75 s | 17.24 ms | 94.36 |
-| 512 in / 2,048 out | 24 / 24 | 440.54 | 849 ms | 17.74 ms | 440.08 |
+| Decode-heavy | 64 · 192/192 | **6,740.73** | 899 ms | 3.06 s | 6.21 ms |
+| Decode-heavy, second seed | 64 · 192/192 | **6,567.19** | 895 ms | 2.99 s | 5.91 ms |
+| Decode-heavy, lower latency | 32 · 96/96 | **4,937.18** | **596 ms** | **1.63 s** | **4.64 ms** |
+| Prefill-heavy, longer input | 4 · 12/12 | 319.56 | 1.92 s | 2.96 s | 4.40 ms |
 
-The result is one controlled rerun, so it shows no measured regression from the role migration. It does not establish a throughput gain from it.
+All **492 measured requests completed without failures**. C64 raises throughput with higher per-token latency; C32 is the lower-latency option. The prefill-heavy row checks longer-input behavior; its output tok/s slowed down due to the computational-heavy nature of prefill operations.
+
+## Recipe and measurement
+
+- **Stack:** vLLM 0.28.0, Dynamo 1.5.0, NIXL 1.3.2, CUDA toolkit 13.0.2. DFlash2 draft `incoai/Qwen3.8-27B-DFlash2`, seven speculative tokens, prefix caching and FlashInfer GDN prefill. Context limit 32K, 32 maximum sequences per worker, 8,192 batched tokens and GPU memory utilization 0.97.
+- **Workload:** `vllm bench serve` through the Dynamo frontend, OpenAI `/v1/completions`, random inputs, temperature 0, ignore EOS, infinite request rate and one warmup per case. Decode requests use nominal 512 input / 2,048 output tokens; prefill-heavy requests use 8,192 / 256.
+- **Metrics:** aggregate output throughput is generated tokens divided by the complete benchmark duration. Mean TPOT averages each request's generation time after its first token, divided by its remaining output tokens. Speculation emits token groups, so inter-event latency is not interchangeable with TPOT. The two C64 runs use different prompts, rather than repeating an identical workload.
+
+**Scope:** synthetic serving measurements, with empirical p99 estimates from these request counts. Custom adapters were enabled, but timed custom-kernel replay and an incremental end-to-end Triton gain were not established for these runs.
+
+Triton implementation details and the separately measured **8.1–9.4% dense-operator latency reduction** are in [kernels/README.md](kernels/README.md).
+
+## Measurement records
+
+[Configuration](results/h200-serving-20261024/configuration.json) · [C64](results/h200-serving-20261024/decode-c64.json) · [C64 second seed](results/h200-serving-20261024/decode-c64-repeat.json) · [C32](results/h200-serving-20261024/decode-c32.json) · [Prefill C4](results/h200-serving-20261024/prefill-c4.json).
+
+Records contain selected vLLM metrics, per-request lengths, TTFT and TPOT, plus hashes of the original benchmark JSONs.

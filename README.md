@@ -2,11 +2,18 @@
 
 Cross-node LLM serving on Stevens Jarvis, built around NVIDIA Dynamo, Slurm and vLLM, with Qwen3.6-specific Triton kernel work.
 
-## Provisional result
+## Results
 
-A cross-node run on 2026-10-23 reported **1,282.89 output tokens/s**, **4.34 ms mean TPOT**, and **298.59 ms mean TTFT** for decode-heavy traffic; the prefill-heavy run reported **313.01 output tokens/s**. It used one H200 NVL for prefill, one for decode, DFlash 2, and a separate control allocation. The prefill-heavy run reached **190.81 output tokens/s**.
+**6.6–6.7K output tokens/s at concurrency 64 on five H200s**, serving Qwen3.8-27B BF16 with cross-node prefill/decode disaggregation and DFlash2. Mean TTFT stayed around **0.9 seconds**, with observed p99 around **3 seconds**.
 
-These are single-run, provisional serving measurements. See [RESULTS.md](RESULTS.md) for the measurements and caveats, and [kernels/README.md](kernels/README.md) for separate operator and dispatch evidence.
+| Decode workload | Output tokens/s | Mean / p99 TTFT | Mean TPOT |
+| --- | ---: | ---: | ---: |
+| concurrency 64 · two runs | **6,567–6,741** | 0.89–0.90 / 2.99–3.06 s | 5.91–6.21 ms |
+| concurrency 32 · one run | **4,937** | 0.60 / 1.63 s | **4.64 ms** |
+
+I added the result for concurrency=32 measurements as well to observe lower latency for sacrificing some throughput. 
+
+Separately, custom Triton reduced dense-MLP operator latency by **8.1–9.4%** versus public matmul + activation on H200. See [serving results and methodology](RESULTS.md) and [kernel implementation and measurements](kernels/README.md).
 
 ## Maybe Kubernetes?
 
@@ -53,7 +60,7 @@ uv run switchyard bootstrap
 uv run switchyard run initial-h100
 ```
 
-`bootstrap.py` installs pinned etcd/NATS binaries. `control-check` validates the control plane without loading a model. `run` starts workers, waits for model discovery, serving directly through Dynamo on port 19000. Stop with Ctrl-C; the launcher cleans up its own services and preserves the allocations. Run directories contain the configuration snapshot and logs.
+`bootstrap` installs pinned etcd/NATS binaries. `control-check` validates the control plane without loading a model. `run` starts workers, waits for model discovery, serving directly through Dynamo on port 19000. Stop with Ctrl-C; the launcher cleans up its own services and preserves the allocations. Run directories contain the configuration snapshot and logs.
 
 Replace expired job IDs before running. `switchyard topology <recipe>` reports GPU, NUMA, and HCA locality. See [DESIGN.md](DESIGN.md) for allocation and fabric details.
 

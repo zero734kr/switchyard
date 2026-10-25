@@ -1,0 +1,166 @@
+{
+  "kind": "synthetic_operator_only",
+  "date": "2026-10-24",
+  "gpu": "NVIDIA H200 NVL",
+  "torch": "2.13.0+cu130",
+  "triton": "3.7.1",
+  "hidden_size": 5120,
+  "intermediate_size": 17408,
+  "dtype": "bfloat16",
+  "baseline": "F.linear followed by installed vLLM CUDA silu_and_mul",
+  "method": "Three warmed rounds, five CUDA-graph samples per round, 120 launches per sample; randomized arm order. Report median of round medians. Three activation seeds per batch.",
+  "cases": [
+    {
+      "token_rows": 2,
+      "public_us": 97.64773050944011,
+      "custom_us": 88.46240043640137,
+      "latency_reduction_pct": 9.40659862253609,
+      "round_medians_us": {
+        "public": [
+          97.64773050944011,
+          97.70853519439697,
+          96.24799887339275
+        ],
+        "custom": [
+          88.59306971232097,
+          88.46240043640137,
+          88.43386967976888
+        ]
+      },
+      "custom_numerical_checks": [
+        {
+          "relative_l2": 0.00033178224111907184,
+          "max_abs": 0.03125,
+          "finite": true,
+          "repeat_exact": true
+        },
+        {
+          "relative_l2": 0.0003226158441975713,
+          "max_abs": 0.015625,
+          "finite": true,
+          "repeat_exact": true
+        },
+        {
+          "relative_l2": 0.00019703229190781713,
+          "max_abs": 0.015625,
+          "finite": true,
+          "repeat_exact": true
+        }
+      ]
+    },
+    {
+      "token_rows": 4,
+      "public_us": 97.37626711527507,
+      "custom_us": 88.52880001068115,
+      "latency_reduction_pct": 9.085855688142363,
+      "round_medians_us": {
+        "public": [
+          97.93813228607178,
+          97.37626711527507,
+          96.96133136749268
+        ],
+        "custom": [
+          88.87973626454671,
+          88.5159969329834,
+          88.52880001068115
+        ]
+      },
+      "custom_numerical_checks": [
+        {
+          "relative_l2": 0.0002440997923258692,
+          "max_abs": 0.03125,
+          "finite": true,
+          "repeat_exact": true
+        },
+        {
+          "relative_l2": 0.0002765207609627396,
+          "max_abs": 0.015625,
+          "finite": true,
+          "repeat_exact": true
+        },
+        {
+          "relative_l2": 0.00023562024580314755,
+          "max_abs": 0.015625,
+          "finite": true,
+          "repeat_exact": true
+        }
+      ]
+    },
+    {
+      "token_rows": 8,
+      "public_us": 97.56320317586263,
+      "custom_us": 89.14693196614583,
+      "latency_reduction_pct": 8.62648102537802,
+      "round_medians_us": {
+        "public": [
+          98.24986457824707,
+          96.51947021484375,
+          97.56320317586263
+        ],
+        "custom": [
+          89.17653560638428,
+          89.09893035888672,
+          89.14693196614583
+        ]
+      },
+      "custom_numerical_checks": [
+        {
+          "relative_l2": 0.0002553451631683856,
+          "max_abs": 0.03125,
+          "finite": true,
+          "repeat_exact": true
+        },
+        {
+          "relative_l2": 0.0002948161563836038,
+          "max_abs": 0.03125,
+          "finite": true,
+          "repeat_exact": true
+        },
+        {
+          "relative_l2": 0.0002388980210525915,
+          "max_abs": 0.015625,
+          "finite": true,
+          "repeat_exact": true
+        }
+      ]
+    },
+    {
+      "token_rows": 16,
+      "public_us": 98.08773199717204,
+      "custom_us": 90.12959798177083,
+      "latency_reduction_pct": 8.113281705433517,
+      "round_medians_us": {
+        "public": [
+          97.68773714701335,
+          99.11253452301025,
+          98.08773199717204
+        ],
+        "custom": [
+          90.0391976038615,
+          90.21200338999431,
+          90.12959798177083
+        ]
+      },
+      "custom_numerical_checks": [
+        {
+          "relative_l2": 0.00024709198623895645,
+          "max_abs": 0.03125,
+          "finite": true,
+          "repeat_exact": true
+        },
+        {
+          "relative_l2": 0.0002913531207013875,
+          "max_abs": 0.03125,
+          "finite": true,
+          "repeat_exact": true
+        },
+        {
+          "relative_l2": 0.00023473041073884815,
+          "max_abs": 0.015625,
+          "finite": true,
+          "repeat_exact": true
+        }
+      ]
+    }
+  ]
+}
