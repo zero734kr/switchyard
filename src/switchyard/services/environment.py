@@ -1,6 +1,8 @@
 """Environment handed to a service, and the GPU/UCX policy applied per role."""
 
+import hashlib
 import os
+from pathlib import Path
 import socket
 import subprocess
 
@@ -130,6 +132,25 @@ def visible_devices(env):
     return [device.strip() for device in exposed.split(",") if device.strip()]
 
 
+def _kernel_cache_namespace(mode, model_key):
+    """AOT model artifacts must not cross runtime-patched kernel versions."""
+    if mode != "custom":
+        return "baseline"
+    digest = hashlib.sha256()
+    for source in sorted(KERNELS.rglob("*.py")):
+        digest.update(str(source.relative_to(KERNELS)).encode())
+        digest.update(b"\0")
+        digest.update(source.read_bytes())
+        digest.update(b"\0")
+    return f"custom-{model_key}-{digest.hexdigest()[:16]}"
+
+
+def _isolate_compile_cache(env, mode, model_key):
+    default_root = Path(env.get("XDG_CACHE_HOME", "~/.cache")) / "vllm"
+    root = Path(env.get("VLLM_CACHE_ROOT", str(default_root))).expanduser()
+    env["VLLM_CACHE_ROOT"] = str(root / "switchyard" / _kernel_cache_namespace(mode, model_key))
+
+
 def select_devices(env, worker):
     """Apply ``gpu_ids`` to Slurm's ``CUDA_VISIBLE_DEVICES`` list."""
     devices = visible_devices(env)
@@ -161,6 +182,7 @@ def select_devices(env, worker):
 def worker(launch, worker_spec, env, visible):
     """Add the per-worker runtime variables (ports, NIXL, kernels, UCX)."""
     settings = launch.settings
+    _isolate_compile_cache(env, settings.engine.kernels, launch.model_key)
     _apply_transport_overrides(env, settings, dict(UCX_AUTO))
     select_hca(launch, worker_spec, env)
     print(
